@@ -3,6 +3,6 @@
 
 
 # folders
-*/.vscode/
+*.vscode/
 *src/
 
