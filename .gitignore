@@ -1,5 +1,8 @@
 *.pdf
 *.log
+*.c
+*.cc
+*.out
 
 
 # folders
