@@ -419,3 +419,211 @@ for (itt it = cont.begin(), ite = cont.end();
 Как и унарные `+` и `-`, они должны быть членами и **не могут** быть перегружены снаружи класса.
 
 ## [Перегрузка цепочечных операторов](https://youtu.be/lHxf3_uHbKg?si=QR8hvRMFuC3tHncl&t=1892)
+
+Поговорим об операторах модифицируемого присваивания вида `op=` (`+=`, `-=`, `<<=` ...). Речи о предикатах `<=` `>=` нет. Они не осуществляют присваивания влево.
+ 
+Все они **правоассоциативны**.
+
+Это означает, что при описании их композиции в строчку, порядок выполнения справа налево:
+```c++
+int a = 3, b = 4, c = 5;
+a += b *= c -= 1;  
+/* сначала для с выполнится с = с - 1 = 5 - 1 = 4
+ * потом b = b * c = // от результата выше // = 4 * 4 = 16
+ * потом a = a + b = // от результата выше // = 3 + 16 = 19 */
+```
+
+Вернёмся к кватернионам и добавим туда реализацию `+=`. Чтобы в длинных цепочках не создавалось куча временных объектов, возвращаем не копию, а ссылку.
+
+```c++
+struct Quat {  // пока не обращаем внимание на отсутствие шаблона
+  int a_, b_, c_, d_; // пока не обращаем внимание, что тут только лишь int
+  Quat& operator+=(const Quat & rhs) const {
+    a_ += rhs.a_; b_ += rhs.b_; c += rhs.c_; d_ += rhs.d_;
+    return *this;
+  }
+};
+```
+Ок. А теперь, мы захотели написать `operator+`. И вот он уже должен будет вернуть копию.
+
+> **Вопрос**: Не уж то придётся повториться?
+>> - нет. Ситуация аналогичная, что и с пре/пост инкрементом. Описываем `+` через `+=`.
+
+```c++
+struct Quat {
+  int a_, b_, c_, d_;
+  Quat& operator+=(const Quat & rhs) const {
+    a += rhs.a; b += rhs.b; c += rhs.c; d += rhs.d;
+    return *this;
+  }
+  Quat operator+(const Quat & rhs) const {
+    Quat res{*this}; res += rhs; return res;
+  }
+};
+
+// и тогда
+
+int main () {
+  Quat x,y; Quat z = x + y; // всё ок
+  ...
+}
+```
+
+Пока всё хорошо. Но потом у нас возникнет, например, необходимость неявного приведения из `int` в `Quat`, что вполне естественно. Наученные 4й лекцией, мы напишем конструктор из `int`. И в текущей форме бинарный `operator+` перестанет нас устравивать.
+
+```c++
+struct Quat {
+  int a_, b_, c_, d_;
+  
+  Quat (int a = 0, int b = 0, int c = 0, int d = 0)
+    : a_(a), b_(b), c_(c), d_(d) {}
+  /* в такой форме конструктор может считаться 
+   * конструктором от одного аргумента,
+   * а следовательно участвовать в неявном приведении
+   *  из int в Quat. */
+
+  Quat& operator+=(const Quat & rhs) const {...}
+  Quat operator+(const Quat & rhs) const {...}
+
+};
+
+int main () {
+  Quat x;
+  Quat y = x + 2; // это ок
+  Quat z = 2 + x; // это не ок "no match for operator+"
+  ...
+}
+```
+
+Последнее не ок, ведь инструкция `2.operator+(x)`, где `x` - это `Quat` - не сработает по понятной причине. <u>У типа `int` нет оператора+ для аргумента типа `Quat`</u>.
+
+Чтобы сделать бинарный оператор симметричным, могущим преобразовать и правую и левую часть, если требуется, нужно вытащить его внаружу. Так же, поскольку он полностью реализован в терминах `operator+=`, ему не нужно дополнительно прокидывать доступ к внутренним полям (т.е. ему не нужно быть `friend`).
+
+```c++
+struct Quat {
+  int a_, b_, c_, d_;
+  
+  Quat (int a = 0, int b = 0, int c = 0, int d = 0)
+    : a_(a), b_(b), c_(c), d_(d) {}
+
+  Quat& operator+=(const Quat & rhs) const {...}
+};
+
+// симметричный бинарный оператор
+Quat operator+(const Quat& lhs, const Quat & rhs) {
+  Quat res{lhs}; res += rhs; return res;
+}
+
+int main () {
+  Quat x;
+  Quat y = x + 2; // это ок
+  Quat z = 2 + x; // 2 приводится неявно в Quat и всё работает.
+  ...
+}
+```
+
+А потом мы вспоминаем, что мы хотим кватернионы не только из `int`, но и из `double`, или `float`, и вешаем шаблон на структуру и внешний оператор:
+
+```c++
+template <typename T>
+struct Quat {
+  T a_, b_, c_, d_;
+  
+  Quat (T a = 0, T b = 0, T c = 0, T d = 0)
+    : a_(a), b_(b), c_(c), d_(d) {}
+
+  template <typename T>
+  Quat& operator+=(const Quat & rhs) const {...}
+};
+
+template <typename T>
+Quat<T> operator+(const Quat<T>& lhs, const Quat<T> & rhs) {
+  Quat<T> res{lhs}; res += rhs; return res;
+}
+
+int main () {
+  Quat<int> x;
+  Quat<int> y = x + 2; // не скомпилируется
+  Quat<int> z = 2 + x; // не скомпилируется
+  // "error: no match for ‘operator+’ 
+  // (operand types are ‘int’ and ‘Quat<int>’) и vice versa"
+  ...
+}
+```
+Стало только хуже.
+> **Вопрос**: В чём причина? Почему даже `x + 2` не подошёл в `operator+`?
+>> - вспомним *name resolution process*, о котором мы говорили в [3й лекции](../../03_lect/abstract/README.md). В нём совпадение по шаблону идёт раньше совпадения с точностью до неявного пользовательского преобразования, и механизм разрешения перегрузки <u>никак не стакает одно с другим</u>. 
+>>
+>> У нас есть одно неявное приведение из `T` в `Quat<T>`, `operator+` от `(Quat<T>&, Quat<T>&)`, и инструкция `x + 2`. При попытке разрешить перегрузку +, компилятор увидит этот `operator+` в *overloading set*, но для его победы требуются и **шаблонная подстановка**, и **неявное пользовательское приведение** <u>одновременно</u>. 
+>>
+>> То есть:
+>> ```c++
+>> Quat<int> y = x + Quat<int>(2); // скомпилируется без вопросов
+>> Quat<int> z = Quat<int>(2) + x; // скомпилируется без вопросов
+>> /* здесь никаких неявных кастов нет, 
+>>  * а потому operator+ совпал по 3му пункту в name resolution. */
+>> ```
+Но мы хотим **не писать** явного приведения инта к `Quat<int>`. Это очень простая просьба в очень простом коде.
+> **Вопрос**: есть ли красивый способ не повторяться и реализовать победу `operator+(Quat<T>&, Quat<T>&)` в случаях `x+2` и `2+x`?
+>> - нет. К сожалению единственный разумный способ разрешить эту дилемму для компилятора - написать 3 перегрузки оператора снаружи класса:
+>>
+>>```c++
+>>template <typename T>
+>>Quat<T> operator+(const Quat<T>& lhs, const Quat<T>& rhs) {
+>>  Quat<T> res{lhs}; res += rhs; return res;
+>>}
+>>
+>> template <typename T>
+>> Quat<T> operator+(const Quat<T>& lhs, const T & rhs) {
+>>   Quat<T> res{rhs}; res += lhs; return res;
+>> }
+>>
+>> template <typename T>
+>> Quat<T> operator+(const T& lhs, const Quat<T>& rhs) {
+>>   Quat<T> res{lhs}; res += rhs; return res;
+>> }
+>>```
+
+И успокаивает нас в этом только то, что в стандартной библиотеке так и делают. Список перегрузки `operator==` для `std::string`, например, который имеет претензии на обратную совместимость с `const char*` -сишными строками, [написан именно так](https://en.cppreference.com/w/cpp/string/basic_string/operator_cmp).
+
+```c++
+template< class CharT, class Traits, class Alloc > bool
+operator==( const std::basic_string<CharT,Traits,Alloc>& lhs,
+            const std::basic_string<CharT,Traits,Alloc>& rhs );
+
+template< class CharT, class Traits, class Alloc > bool
+operator==( const CharT* lhs,
+            const std::basic_string<CharT,Traits,Alloc>& rhs );
+
+template< class CharT, class Traits, class Alloc > bool
+operator==( const std::basic_string<CharT,Traits,Alloc>& lhs,
+            const CharT* rhs );
+```
+
+По окончанию этой подглавы два предостережения:
+
+1. Ни в коем случае нельзя писать overloading set одинаково называющихся методов/функций частично изнутри, частично снаружи класса. Это повлечёт проблемы.
+
+2. Если мы пишем очень много неявных приведений "в нас", лишний раз лучше перестраховаться и навесить на менее важные `explicit`. Много неявных приведений в совокупности с перегрузками операторов может повлечь очень странные эффекты.
+
+Глянем на, что может показаться первый взгляд, синтетический пример:
+
+```c++
+// тип без состояния
+struct S {
+  S(std::string) {}
+  S(std::wstring) {}
+};
+
+// раз состояния у объектов нет, то might as well be always true
+bool operator==(const S& lhs, const S& rhs) { return true; }
+
+int main () {
+  std::string bar("bar");
+  std::wstring foo(L"foo");
+  if (bar == foo) std::cout << "WAT?" << std::endl;
+}
+```
+Казалось бы, инициализировали по-разному, а "WAT" выстрелит в `stdout`. Ведь неявное приведение из `wstring` и из `string` в `S` есть, а для `S` определён требуемый предикат. В C++17 в первичной реализации `std::filesystem` произошла ошибка подобного рода...
+
+## Консистентная семантика перегрузок операторов
